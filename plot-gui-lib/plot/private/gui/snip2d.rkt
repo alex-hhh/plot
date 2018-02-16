@@ -9,7 +9,6 @@
          plot/private/common/parameter-group
          plot/private/common/draw-attribs
          plot/private/plot2d/plot-area
-         plot/private/no-gui/plot2d
          plot/private/no-gui/plot2d-utils
          "worker-thread.rkt"
          "snip.rkt")
@@ -65,7 +64,7 @@
                      (get-bitmap) (get-saved-plot-parameters)
                      make-bm plot-bounds-rect area-bounds-rect area area-bounds->plot-bounds width height))
       (when mouse-event-callback
-        (send c set-mouse-callback mouse-event-callback))
+        (send c set-mouse-event-callback mouse-event-callback))
       c)
 
     (define left-click-x 0)
@@ -181,13 +180,6 @@
                (match-let (((vector px py) (send area dc->plot (vector mouse-x mouse-y))))
                  (mouse-event-callback this evt px py))
                (mouse-event-callback this evt #f #f)))]))
-
-    (define/public (set-mouse-callback callback)
-      (set! mouse-event-callback callback)
-      (set! mouse-event-handler
-            (if mouse-event-callback
-                hover-info-mouse-event-handler
-                zoom-or-unzoom-mouse-event-handler)))
 
     (define the-overlays '())
     (define the-overlays/renderers '())
@@ -365,6 +357,95 @@
       (send dc set-text-mode old-text-mode)
       (send dc set-text-foreground old-text-fg)
       (send dc set-text-background old-text-bg))
+    (define mouse-event-callback #f)
+    (define mouse-event-handler zoom-or-unzoom-mouse-event-handler)
+
+    (define (user-mouse-event-handler dc x y editorx editory evt)
+      (define mouse-x (- (send evt get-x) x))
+      (define mouse-y (- (send evt get-y) y))
+      (when area
+        (if (rect-contains? area-bounds-rect (vector mouse-x mouse-y))
+            (match-let (((vector px py) (send area dc->plot (vector mouse-x mouse-y))))
+              (mouse-event-callback this evt px py))
+            (mouse-event-callback this evt #f #f))))
+
+    (define/public (set-mouse-event-callback callback)
+      (set! mouse-event-callback callback)
+      (set! mouse-event-handler
+            (if mouse-event-callback
+                user-mouse-event-handler
+                zoom-or-unzoom-mouse-event-handler)))
+
+    (define the-overlay-renderers #f)
+
+    (define/public (set-overlay-renderers renderers)
+      (set! the-overlay-renderers renderers)
+      (refresh))
+
+    (define (draw-overlay-renderers dc x y left top right bottom)
+      (when (list? the-overlay-renderers)
+        ;; Implementation notes:
+        ;;
+        ;; * the `plot-area` routine used to draw plots, expects the origin of
+        ;; the DC to be set to the origin or (0, 0) of the plot, see
+        ;; `set-origin` call.
+        ;;
+        ;; * Since the DC origin has been adjusted to start at X, Y, the LEFT,
+        ;; TOP, RIGHT and BOTTOM values have to be adjusted accordingly.
+        ;;
+        ;; * plot Y axis grows upwards (lower values are at the bottom, higher
+        ;; values are at the top), draw context Y axis grows downwards (lower
+        ;; values are at the top, higher values are at the bottom).  This
+        ;; results in some non-obvious `plot->dc` and `dc->plot` calls.
+        ;;
+        ;; * The area bounded by LEFT, TOP, RIGHT and BOTTOM might cover an
+        ;; area outside the plot area (e.g. where axis are drawn).  We need to
+        ;; intersect the current plot bounds with this area to obtain the
+        ;; final overlay redraw area.
+        ;;
+        ;; * If the redraw area is at the edge of the visible part of the plot
+        ;; snip, we seem to have an off-by-one error and pixels are "left
+        ;; over" at the edge.  This is adjusted using the `add1`, `sub1` calls
+        ;; below.
+
+        (match-define (vector (ivl cx-min cx-max) (ivl cy-min cy-max)) plot-bounds-rect)
+        (match-define (vector cleft ctop) (send area plot->dc (vector cx-min cy-max)))
+        (match-define (vector cright cbottom) (send area plot->dc (vector cx-max cy-min)))
+
+        (define dc-x-min (max cleft (add1 (- left x))))
+        (define dc-x-max (min cright (sub1 (- right x))))
+        (define dc-y-min (max ctop (add1 (- top y))))
+        (define dc-y-max (min cbottom (sub1 (- bottom y))))
+
+        (when (and (> dc-x-max dc-x-min) (> dc-y-max dc-y-min))
+          (match-define (vector ox-min oy-min) (send area dc->plot (vector dc-x-min dc-y-max)))
+          (match-define (vector ox-max oy-max) (send area dc->plot (vector dc-x-max dc-y-min)))
+
+          (define-values (scale-x scale-y) (send dc get-scale))
+          (define-values (origin-x origin-y) (send dc get-origin))
+          (send dc set-origin (+ origin-x (* scale-x x)) (+ origin-y (* scale-y y)))
+
+          ;; Use the same plot parameters as the main plot -- this ensures
+          ;; that any axis transforms (e.g. logarithmic, stretch, etc) are
+          ;; applied to the overlays as well.  We than omit the decorations
+          ;; and specify a transparent background so the main plot underneath
+          ;; is visible.
+          (parameterize/group ([plot-parameters  (get-saved-plot-parameters)])
+            (parameterize ([plot-decorations? #f]
+                           [plot-background-alpha 0])
+              ;; The new overlay area has to be constructed inside the
+              ;; parameterize call, as it picks up the value of the
+              ;; plot-decorations? parameter.
+              (define overlay-area
+                (make-object 2d-plot-area%
+                             (vector (ivl ox-min ox-max) (ivl oy-min oy-max))
+                             '() '() '() '()
+                             dc
+                             dc-x-min dc-y-min
+                             (- dc-x-max dc-x-min) (- dc-y-max dc-y-min)))
+              (plot-area overlay-area the-overlay-renderers)))
+
+          (send dc set-origin origin-x origin-y))))
 
     (define/override (on-event dc x y editorx editory evt)
       (apply mouse-event-handler dc x y editorx editory evt '())
@@ -461,9 +542,9 @@
       (super draw dc x y left top right bottom dx dy draw-caret)
       (when dragging?
         (parameterize/group ([plot-parameters  (get-saved-plot-parameters)])
-                            (draw-selection dc x y (get-new-area-bounds-rect))))
+          (draw-selection dc x y (get-new-area-bounds-rect))))
       (draw-overlays dc x y)
-      (draw-overlays/renderers dc x y))
+      (draw-overlay-renderers dc x y left top right bottom))
 
     (define/override (resize w h)
       (when (not (and (= w width) (= h height)))
