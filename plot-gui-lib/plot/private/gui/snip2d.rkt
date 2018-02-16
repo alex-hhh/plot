@@ -74,8 +74,6 @@
     
     (define plot-bounds-rects empty)
 
-    (define mouse-event-callback #f)
-
     (define (get-new-area-bounds-rect)
       (rect-meet area-bounds-rect
                  (rect-inexact->exact
@@ -165,32 +163,10 @@
                                   (<= 0 mouse-y (send (get-bitmap) get-height)))
                              (set-click-message)])]))
 
-    (define mouse-event-handler zoom-or-unzoom-mouse-event-handler)
-
-    (define (hover-info-mouse-event-handler dc x y editorx editory evt)
-      (define evt-type (send evt get-event-type))
-      (define mouse-x (- (send evt get-x) x))
-      (define mouse-y (- (send evt get-y) y))
-      (case evt-type
-        [(leave)
-         (mouse-event-callback this evt #f #f)]
-        [(motion)
-         (when area
-           (if (rect-contains? area-bounds-rect (vector mouse-x mouse-y))
-               (match-let (((vector px py) (send area dc->plot (vector mouse-x mouse-y))))
-                 (mouse-event-callback this evt px py))
-               (mouse-event-callback this evt #f #f)))]))
-
     (define the-overlays '())
-    (define the-overlays/renderers '())
 
     (define/public (clear-overlays)
-      (set! the-overlays '())
-      (set! the-overlays/renderers '()))
-
-    (define/public (set-overlay-renderers renderers)
-      (set! the-overlays/renderers renderers)
-      (refresh))
+      (set! the-overlays '()))
 
     (define/public (add-mark-overlay x y #:radius (r 10) #:pen (pen #f) #:brush (brush #f)
                                     #:label (label #f)
@@ -223,26 +199,6 @@
 
     (define/public (refresh-overlays)
       (refresh))
-
-    (define (draw-overlays/renderers dc x y)
-      (unless (null? the-overlays/renderers)
-        (match-define (vector (ivl x-min x-max) (ivl y-min y-max)) plot-bounds-rect)
-        (match-define (vector dc-x-min dc-y-min) (send area plot->dc (vector x-min y-min)))
-        (match-define (vector dc-x-max dc-y-max) (send area plot->dc (vector x-max y-max)))
-        (define-values (scale-x scale-y) (send dc get-scale))
-        (define-values (origin-x origin-y) (send dc get-origin))
-        (send dc set-origin
-              (+ origin-x (* scale-x x))
-              (+ origin-y (* scale-y y)))
-        (parameterize ([plot-decorations? #f]
-                       [plot-background-alpha 0])
-          (define oarea (make-object 2d-plot-area% plot-bounds-rect '() '() '() '() dc
-                                     (min dc-x-min dc-x-max)
-                                     (min dc-y-min dc-y-max)
-                                     (abs (- dc-x-max dc-x-min))
-                                     (abs (- dc-y-max dc-y-min))))
-          (plot-area oarea the-overlays/renderers))
-        (send dc set-origin origin-x origin-y)))
 
     (define (draw-overlays dc x y)
       (define old-pen (send dc get-pen))
@@ -357,9 +313,24 @@
       (send dc set-text-mode old-text-mode)
       (send dc set-text-foreground old-text-fg)
       (send dc set-text-background old-text-bg))
+    
     (define mouse-event-callback #f)
     (define mouse-event-handler zoom-or-unzoom-mouse-event-handler)
 
+    (define (hover-info-mouse-event-handler dc x y editorx editory evt)
+      (define evt-type (send evt get-event-type))
+      (define mouse-x (- (send evt get-x) x))
+      (define mouse-y (- (send evt get-y) y))
+      (case evt-type
+        [(leave)
+         (mouse-event-callback this evt #f #f)]
+        [(motion)
+         (when area
+           (if (rect-contains? area-bounds-rect (vector mouse-x mouse-y))
+               (match-let (((vector px py) (send area dc->plot (vector mouse-x mouse-y))))
+                 (mouse-event-callback this evt px py))
+               (mouse-event-callback this evt #f #f)))]))
+    
     (define (user-mouse-event-handler dc x y editorx editory evt)
       (define mouse-x (- (send evt get-x) x))
       (define mouse-y (- (send evt get-y) y))
