@@ -222,7 +222,8 @@
       (define old-text-mode (send dc get-text-mode))
       (define old-text-fg (send dc get-text-foreground))
       (define old-text-bg (send dc get-text-background))
-      (match-define (vector (ivl area-x-min area-x-max) (ivl area-y-min area-y-max)) area-bounds-rect)
+      (match-define (vector (ivl area-x-min area-x-max) (ivl area-y-min area-y-max))
+        (send area get-area-bounds-rect))
       (define-values (scale-x scale-y) (send dc get-scale))
       (define-values (origin-x origin-y) (send dc get-origin))
       (send dc set-origin
@@ -340,7 +341,7 @@
          (mouse-event-callback this evt #f #f)]
         [(motion)
          (when area
-           (if (rect-contains? area-bounds-rect (vector mouse-x mouse-y))
+           (if (rect-contains? (send area get-area-bounds-rect) (vector mouse-x mouse-y))
                (match-let (((vector px py) (send area dc->plot (vector mouse-x mouse-y))))
                  (mouse-event-callback this evt px py))
                (mouse-event-callback this evt #f #f)))]))
